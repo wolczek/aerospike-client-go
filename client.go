@@ -1358,9 +1358,31 @@ func (clnt *Client) sendInfoCommand(timeout time.Duration, command string) (map[
 	return results, nil
 }
 
+// this is a stripped down version of batchExecute()
+// it's more performant than batchExecute() when ConcurrentNodes is 1 (default setting)
+func (clnt *Client) batchExecuteSimple(policy *BatchPolicy, batchNodes []*batchNode, cmd batcher) (error, int) {
+	filteredOut := 0
+	errs := []error{}
+
+	for _, batchNode := range batchNodes {
+		newCmd := cmd.cloneBatchCommand(batchNode)
+		err := newCmd.Execute()
+		if err != nil {
+			errs = append(errs, err)
+		}
+		filteredOut += newCmd.(batcher).filteredOut()
+	}
+
+	return mergeErrors(errs), filteredOut
+}
+
 // batchExecute Uses sync.WaitGroup to run commands using multiple goroutines,
 // and waits for their return
 func (clnt *Client) batchExecute(policy *BatchPolicy, batchNodes []*batchNode, cmd batcher) (error, int) {
+	if policy.ConcurrentNodes == 1 { // don't have to spawn a bunch of goroutines in this case
+		return batchExecuteSimple(policy, batchNodes, cmd)
+	}
+
 	var wg sync.WaitGroup
 	filteredOut := 0
 
