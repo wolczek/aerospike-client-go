@@ -1433,7 +1433,7 @@ func (clnt *Client) batchExecuteSimple(policy *BatchPolicy, batchNodes []*batchN
 // and waits for their return
 func (clnt *Client) batchExecute(policy *BatchPolicy, batchNodes []*batchNode, cmd batcher) (error, int) {
 	if policy.ConcurrentNodes == 1 { // don't have to spawn a bunch of goroutines in this case
-		return batchExecuteSimple(policy, batchNodes, cmd)
+		return clnt.batchExecuteSimple(policy, batchNodes, cmd)
 	}
 
 	var wg sync.WaitGroup
