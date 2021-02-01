@@ -21,6 +21,9 @@ import "fmt"
 type ResultCode int
 
 const (
+	// Max errors limit reached.
+	MAX_ERROR_RATE ResultCode = -15
+
 	// Requested Rack for node/namespace was not defined in the cluster.
 	RACK_NOT_DEFINED ResultCode = -13
 
@@ -147,6 +150,9 @@ const (
 
 	// The transaction was not performed because the filter was false.
 	FILTERED_OUT ResultCode = 27
+
+	// Write command loses conflict to XDR.
+	LOST_CONFLICT = 28
 
 	// There are no more records left for query.
 	QUERY_END ResultCode = 50
@@ -304,6 +310,9 @@ func KeepConnection(err error) bool {
 // Return result code as a string.
 func ResultCodeToString(resultCode ResultCode) string {
 	switch ResultCode(resultCode) {
+	case MAX_ERROR_RATE:
+		return "Max errors limit reached for node"
+
 	case RACK_NOT_DEFINED:
 		return "Requested Rack for node/namespace was not defined in the cluster."
 
@@ -426,6 +435,9 @@ func ResultCodeToString(resultCode ResultCode) string {
 
 	case FILTERED_OUT:
 		return "Transaction filtered out"
+
+	case LOST_CONFLICT:
+		return "Write command loses conflict to XDR."
 
 	case QUERY_END:
 		return "Query end"

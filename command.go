@@ -126,6 +126,8 @@ type command interface {
 
 // Holds data buffer for the command
 type baseCommand struct {
+	buffer
+
 	node *Node
 	conn *Connection
 
@@ -136,9 +138,6 @@ type baseCommand struct {
 	// the buffer, this padding will be used to compress the command in-place,
 	// and then the compressed proto header will be written.
 	dataBufferCompress []byte
-	dataBuffer         []byte
-	dataOffset         int
-
 	// oneShot determines if streaming commands like query, scan or queryAggregate
 	// are not retried if they error out mid-parsing
 	oneShot bool
@@ -1973,7 +1972,7 @@ func (cmd *baseCommand) executeAt(ifc command, policy *BasePolicy, isRead bool, 
 	// for exponential backoff
 	interval := policy.SleepBetweenRetries
 
-	shouldSleep := false
+	notFirstIteration := false
 	isClientTimeout := false
 
 	// Execute command until successful, timed out or maximum iterations have been reached.
@@ -1990,7 +1989,7 @@ func (cmd *baseCommand) executeAt(ifc command, policy *BasePolicy, isRead bool, 
 		}
 
 		// Sleep before trying again, after the first iteration
-		if policy.SleepBetweenRetries > 0 && shouldSleep {
+		if policy.SleepBetweenRetries > 0 && notFirstIteration {
 			// Do not sleep if you know you'll wake up after the deadline
 			if policy.TotalTimeout > 0 && time.Now().Add(interval).After(deadline) {
 				break
@@ -2002,7 +2001,7 @@ func (cmd *baseCommand) executeAt(ifc command, policy *BasePolicy, isRead bool, 
 			}
 		}
 
-		if shouldSleep {
+		if notFirstIteration {
 			aerr, ok := err.(AerospikeError)
 			if !ifc.prepareRetry(ifc, isClientTimeout || (ok && aerr.ResultCode() != SERVER_NOT_AVAILABLE)) {
 				if bc, ok := ifc.(batcher); ok {
@@ -2018,7 +2017,7 @@ func (cmd *baseCommand) executeAt(ifc command, policy *BasePolicy, isRead bool, 
 		// NOTE: This is important to be after the prepareRetry block above
 		isClientTimeout = false
 
-		shouldSleep = true
+		notFirstIteration = true
 
 		// check for command timeout
 		if policy.TotalTimeout > 0 && time.Now().After(deadline) {
@@ -2031,6 +2030,14 @@ func (cmd *baseCommand) executeAt(ifc command, policy *BasePolicy, isRead bool, 
 			isClientTimeout = true
 
 			// Node is currently inactive. Retry.
+			continue
+		}
+
+		// check if node has encountered too many errors
+		if err := cmd.node.validateErrorCount(); err != nil {
+			isClientTimeout = false
+
+			// Max error rate achieved, try again per policy
 			continue
 		}
 
@@ -2079,6 +2086,10 @@ func (cmd *baseCommand) executeAt(ifc command, policy *BasePolicy, isRead bool, 
 		_, err = cmd.conn.Write(cmd.dataBuffer[:cmd.dataOffset])
 		if err != nil {
 			isClientTimeout = true
+			if deviceOverloadError(err) {
+				isClientTimeout = false
+				cmd.node.incrErrorCount()
+			}
 
 			// IO errors are considered temporary anomalies. Retry.
 			// Close socket to flush out possible garbage. Do not put back in pool.
@@ -2093,11 +2104,11 @@ func (cmd *baseCommand) executeAt(ifc command, policy *BasePolicy, isRead bool, 
 		// Parse results.
 		err = ifc.parseResult(ifc, cmd.conn)
 		if err != nil {
-			if _, ok := err.(net.Error); err == ErrTimeout || err == io.EOF || ok {
-				isClientTimeout = true
+			if networkError(err) {
+				isClientTimeout = (err == ErrTimeout)
 				if err != ErrTimeout {
-					if aerr, ok := err.(AerospikeError); ok && aerr.ResultCode() == TIMEOUT {
-						isClientTimeout = false
+					if deviceOverloadError(err) {
+						cmd.node.incrErrorCount()
 					}
 				}
 
@@ -2151,4 +2162,14 @@ func (cmd *baseCommand) executeAt(ifc command, policy *BasePolicy, isRead bool, 
 
 func (cmd *baseCommand) parseRecordResults(ifc command, receiveSize int) (bool, error) {
 	panic("Abstract method. Should not end up here")
+}
+
+func networkError(err error) bool {
+	_, ok := err.(net.Error)
+	return err == ErrTimeout || err == io.EOF || ok
+}
+
+func deviceOverloadError(err error) bool {
+	aerr, ok := err.(AerospikeError)
+	return ok && aerr.ResultCode() == DEVICE_OVERLOAD
 }

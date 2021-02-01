@@ -14,6 +14,8 @@
 package aerospike
 
 import (
+	"encoding/base64"
+
 	ParticleType "github.com/aerospike/aerospike-client-go/internal/particle_type"
 )
 
@@ -72,6 +74,7 @@ var (
 	expOpSET_NAME      expOp = 70
 	expOpKEY_EXISTS    expOp = 71
 	expOpIS_TOMBSTONE  expOp = 72
+	expOpMEMORY_SIZE   expOp = 73
 	expOpKEY           expOp = 80
 	expOpBIN           expOp = 81
 	expOpBIN_TYPE      expOp = 82
@@ -402,6 +405,21 @@ func (fe *FilterExpression) pack(buf BufferEx) (int, error) {
 	return fe.packValue(buf)
 }
 
+func (fe *FilterExpression) base64() (string, error) {
+	sz, err := fe.pack(nil)
+	if err != nil {
+		return "", err
+	}
+
+	input := newBuffer(sz)
+	_, err = fe.pack(input)
+	if err != nil {
+		return "", err
+	}
+
+	return base64.StdEncoding.EncodeToString(input.dataBuffer[:input.dataOffset]), nil
+}
+
 // ExpKey creates a record key expression of specified type.
 func ExpKey(exp_type ExpType) *FilterExpression {
 	return newFilterExpression(
@@ -542,6 +560,13 @@ func ExpSetName() *FilterExpression {
 // If server storage-engine is memory, then zero is returned.
 func ExpDeviceSize() *FilterExpression {
 	return newFilterExpression(&expOpDEVICE_SIZE, nil, nil, nil, nil, nil)
+}
+
+// ExpMemorySize creates expression that returns record size in memory. If server storage-engine is
+// not memory nor data-in-memory, then zero is returned. This expression usually evaluates
+// quickly because record meta data is cached in memory.
+func ExpMemorySize() *FilterExpression {
+	return newFilterExpression(&expOpMEMORY_SIZE, nil, nil, nil, nil, nil)
 }
 
 // ExpLastUpdate creates a function that returns record last update time expressed as 64 bit integer
